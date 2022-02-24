@@ -23,9 +23,20 @@ PROCESSOR 16F887
 // config statements should precede project file includes.
 #include <xc.inc>
 
+RESET_TMR0 MACRO TMR_VAR
+    BANKSEL TMR0	    ; cambiamos de banco
+    MOVLW   TMR_VAR
+    MOVWF   TMR0	    ; configuramos tiempo de retardo
+    BCF	    T0IF	    ; limpiamos bandera de interrupción
+    ENDM
+  
 PSECT udata_shr			 ; Memoria compartida
     W_TEMP:		DS 1
     STATUS_TEMP:	DS 1
+    valor:		DS 1	; Contiene valor a mostrar en los displays de 7-seg
+    banderas:		DS 1	; Indica que display hay que encender
+    nibbles:		DS 2	; Contiene los nibbles alto y bajo de valor
+    display:		DS 2	; Representación de cada nibble en el display de 7-seg
 
 PSECT resVect, class = CODE, abs, delta = 2
 ; ----------- VECTOR RESET ----------------
@@ -44,8 +55,10 @@ PUSH:
     MOVWF   STATUS_TEMP	    ; Guardamos STATUS
 
 ISR:
-    BTFSC   RBIF	    ; Interrupción del PORTB
-    CALL    INT_IOCB	    ; Subrutina de interrupción de PORTB
+    BTFSC   RBIF		; Fue interrupción del PORTB? No=0 Si=1
+    CALL    INT_IOCB		; Si -> Subrutina de interrupción de PORTB
+    BTFSC   T0IF		; Fue interrupción del TMR0? No=0 Si=1
+    CALL    INT_TMR0		; Si -> Subrutina de interrupción de TMR0
 
 POP:
     SWAPF   STATUS_TEMP, W
@@ -58,12 +71,16 @@ POP:
 INT_IOCB:
     BANKSEL PORTA
     BTFSS   PORTB, 0	    ; Primer botón
-    INCF    PORTA	    ; Incremento de contador
+    INCF    valor	    ; Incremento de contador
     BTFSS   PORTB, 1	    ; Segundo botón
-    DECF    PORTA	    ; Decremento de contador
+    DECF    valor	    ; Decremento de contador
     BCF	    RBIF	    ; Se limpia bandera de interrupción de PORTB
     RETURN
-
+    
+INT_TMR0:
+    RESET_TMR0 217		; Reiniciamos TMR0 para 50ms
+    CALL    MOSTRAR_VALOR	; Mostramos valor en hexadecimal en los displays
+    RETURN
 
 
 PSECT code, delta = 2, abs
@@ -74,10 +91,15 @@ main:
     CALL CONFIG_RELOJ
     CALL CONFIG_IOCB
     CALL CONFIG_INT
+    CALL CONFIG_TMR0		; Configuración de TMR0
     BANKSEL PORTA
 
 LOOP:
-    GOTO LOOP
+    ;MOVF    PORTA, W		; Valor del PORTA a W
+    MOVF    valor, W		; Movemos W a variable valor
+    CALL    OBTENER_NIBBLE	; Guardamos nibble alto y bajo de valor
+    CALL    SET_DISPLAY		; Guardamos los valores a enviar en PORTA para mostrar valor en hex
+    GOTO    LOOP
 
 ; ------------subrutinas
 
@@ -90,6 +112,8 @@ CONFIG_IO:
     BSF	    TRISB, 0		; PORTB0 como entrada
     BSF	    TRISB, 1		; PORTB1 como entrada
     CLRF    TRISA		; PORTA como salida
+    BCF	    TRISD, 0		; RD0 como salida / display nibble alto
+    BCF	    TRISD, 1		; RD1 como salida / display nibble bajo
 
     BANKSEL OPTION_REG
     BCF	    OPTION_REG, 7
@@ -101,7 +125,8 @@ CONFIG_IO:
     BANKSEL PORTA
     CLRF    PORTA
     CLRF    PORTB
-
+    CLRF    PORTD
+    CLRF    banderas
     RETURN
 
 CONFIG_RELOJ:
@@ -111,11 +136,23 @@ CONFIG_RELOJ:
     BSF OSCCON, 5
     BCF OSCCON, 4	; IRCF<2:0> -> 110 4MHz
     RETURN
+    
+CONFIG_TMR0:
+    BANKSEL OPTION_REG		; cambiamos de banco
+    BCF	    T0CS		; TMR0 como temporizador
+    BCF	    PSA			; prescaler a TMR0
+    BSF	    PS2
+    BSF	    PS1
+    BSF	    PS0			; PS<2:0> -> 111 prescaler 1 : 256
+    RESET_TMR0 217		; Reiniciamos TMR0 para 10ms
+    RETURN 
 
 CONFIG_INT:
     BANKSEL INTCON
     BSF GIE		; Habilitamos interrupciones
     BSF RBIE		; Habilitamos interrupcion RBIE
+    BSF	T0IE		; Habilitamos interrupcion TMR0
+    BCF	T0IF		; Limpiamos bandera de int. de TMR0
     BCF RBIF		; Limpia bandera RBIF
     RETURN
 
@@ -124,11 +161,76 @@ CONFIG_IOCB:
     BSF	    IOCB, 0	; Interrupción habilitada en PORTB0
     BSF	    IOCB, 1	; Interrupción habilitada en PORTB1
 
-    BANKSEL PORTA
+    BANKSEL PORTB
     MOVF    PORTB, W	; Al leer, deja de hacer mismatch
     BCF	    RBIF	; Limpiamos bandera de interrupción
     RETURN
+    
+OBTENER_NIBBLE:			; Obtenemos nibble bajo
+    MOVLW   0x0F		;    Valor = 1101 0101
+    ANDWF   valor, W		;	 AND 0000 1111
+    MOVWF   nibbles		;	     0000 0101	
+				; Obtenemos nibble alto
+    MOVLW   0xF0		;     Valor = 1101 0101
+    ANDWF   valor, W		;	  AND 1111 0000
+    MOVWF   nibbles+1		;	      1101 0000
+    SWAPF   nibbles+1, F	;	      0000 1101	
+    RETURN
 
+SET_DISPLAY:
+    MOVF    nibbles, W		; Movemos nibble bajo a W
+    CALL    TABLA_7SEG		; Buscamos valor a cargar en PORTA
+    MOVWF   display		; Guardamos en display
+    
+    MOVF    nibbles+1, W	; Movemos nibble alto a W
+    CALL    TABLA_7SEG		; Buscamos valor a cargar en PORTA
+    MOVWF   display+1		; Guardamos en display+1
+    RETURN
+    
+MOSTRAR_VALOR:
+    BCF	    PORTD, 0		; Apagamos display de nibble alto
+    BCF	    PORTD, 1		; Apagamos display de nibble bajo
+    BTFSC   banderas, 0		; Verificamos bandera
+    GOTO    DISPLAY_1		
+    
+    DISPLAY_0:			
+	MOVF    display, W	; Movemos display a W
+	MOVWF   PORTA		; Movemos Valor de tabla a PORTA
+	BSF	PORTD, 1	; Encendemos display de nibble bajo
+	BSF	banderas, 0	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+    RETURN
+
+    DISPLAY_1:
+	MOVF    display+1, W	; Movemos display+1 a W
+	MOVWF   PORTA		; Movemos Valor de tabla a PORTA
+	BSF	PORTD, 0	; Encendemos display de nibble alto
+	BCF	banderas, 0	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+    RETURN
+
+    
+ORG 200h
+TABLA_7SEG:
+    CLRF    PCLATH		; Limpiamos registro PCLATH
+    BSF	    PCLATH, 1		; Posicionamos el PC en dirección 02xxh
+    ANDLW   0x0F		; no saltar más del tamaño de la tabla
+    ADDWF   PCL
+    RETLW   00111111B	;0
+    RETLW   00000110B	;1
+    RETLW   01011011B	;2
+    RETLW   01001111B	;3
+    RETLW   01100110B	;4
+    RETLW   01101101B	;5
+    RETLW   01111101B	;6
+    RETLW   00000111B	;7
+    RETLW   01111111B	;8
+    RETLW   01101111B	;9
+    RETLW   01110111B	;A
+    RETLW   01111100B	;b
+    RETLW   00111001B	;C
+    RETLW   01011110B	;d
+    RETLW   01111001B	;E
+    RETLW   01110001B	;F
+    
 END
 
 
