@@ -98,7 +98,7 @@ DEC_BOTON:
     RETURN 
     
 INT_TMR0:
-    RESET_TMR0 217		; Reiniciamos TMR0 para 50ms
+    RESET_TMR0 217		; Reiniciamos TMR0 para 10ms
     CALL    MOSTRAR_VALOR	; Mostramos valor en hexadecimal en los displays
     RETURN
 
@@ -264,7 +264,7 @@ MOSTRAR_VALOR:
     RETURN
     
     DISPLAY_2:			
-	MOVF    decenas, W	; Movemos display a W
+	MOVF    decenas, W	; Movemos display de decenas a W
 	MOVWF   PORTC		; Movemos Valor de tabla a PORTC
 	BSF	PORTD, 5	; Encendemos display 
 	BCF	banderas, 3	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
@@ -272,7 +272,7 @@ MOSTRAR_VALOR:
     RETURN
 
     DISPLAY_3:
-	MOVF    centenas, W	; Movemos display+1 a W
+	MOVF    centenas, W	; Movemos display de centenas a W
 	MOVWF   PORTC		; Movemos Valor de tabla a PORTC
 	BSF	PORTD, 4	; Encendemos display 
 	BCF	banderas, 4	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
@@ -280,7 +280,7 @@ MOSTRAR_VALOR:
     RETURN
     
     DISPLAY_4:
-	MOVF    unidades, W	; Movemos display+4 a W
+	MOVF    unidades, W	; Movemos display de unidades a W
 	MOVWF   PORTC		; Movemos Valor de tabla a PORTC
 	BSF	PORTD, 3	; Encendemos display 
 	CLRF	banderas
