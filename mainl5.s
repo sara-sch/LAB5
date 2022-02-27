@@ -33,26 +33,36 @@ RESET_TMR0 MACRO TMR_VAR
 PSECT udata_shr			 ; Memoria compartida
     W_TEMP:		DS 1
     STATUS_TEMP:	DS 1
+
+PSECT udata_bank0
     valor:		DS 1	; Contiene valor a mostrar en los displays de 7-seg
     banderas:		DS 1	; Indica que display hay que encender
     nibbles:		DS 2	; Contiene los nibbles alto y bajo de valor
     display:		DS 2	; Representación de cada nibble en el display de 7-seg
-
+    UNITS:		DS 1	; Contiene las unidades del valor hexadecimal
+    TENS:		DS 1	; Contiene las centenas del valor hexadecimal
+    HUNDRS:		DS 1	; Contiene las decenas del valor hexadecimal
+    cantidad:		DS 1	; Contiene valor utilizado para contador u/d/c
+    num:		DS 1	; Contador
+    centenas:		DS 1	; Contiene las centenas a mostrar en el display
+    decenas:		DS 1	; Contiene las decenas a mostrar en el display
+    unidades:		DS 1	; Contiene las unidades a mostrar en el display
+    
 PSECT resVect, class = CODE, abs, delta = 2
 ; ----------- VECTOR RESET ----------------
 
 ORG 00h
 resVect:
-	PAGESEL main	    ; cambio de pagina
+	PAGESEL main		; cambio de pagina
 	GOTO main
 
 PSECT intVect, class=CODE, abs, delta=2
 ;---------------------interrupt vector---------------------
 ORG 04h
 PUSH:
-    MOVWF   W_TEMP	    ; Guardamos W
+    MOVWF   W_TEMP		; Guardamos W
     SWAPF   STATUS, W
-    MOVWF   STATUS_TEMP	    ; Guardamos STATUS
+    MOVWF   STATUS_TEMP		; Guardamos STATUS
 
 ISR:
     BTFSC   RBIF		; Fue interrupción del PORTB? No=0 Si=1
@@ -70,12 +80,22 @@ POP:
 ;----------------subrutinas int---------------------    
 INT_IOCB:
     BANKSEL PORTA
-    BTFSS   PORTB, 0	    ; Primer botón
-    INCF    valor	    ; Incremento de contador
-    BTFSS   PORTB, 1	    ; Segundo botón
-    DECF    valor	    ; Decremento de contador
-    BCF	    RBIF	    ; Se limpia bandera de interrupción de PORTB
+    BTFSS   PORTB, 0		; Primer botón
+    CALL    INC_BOTON		; Llamamos a la subrutina del incremento
+    BTFSS   PORTB, 1		; Segundo botón
+    CALL    DEC_BOTON		; Llamamos a la subrutina del decremento
+    BCF	    RBIF		; Se limpia bandera de interrupción de PORTB
     RETURN
+    
+INC_BOTON:
+    INCF    valor		 ; Incremento de contador
+    INCF    num			 ; Incremento de los num. en binarios
+    RETURN 
+    
+DEC_BOTON:
+    DECF    valor		; Decremento de contador
+    DECF    num			; Decremento de los num. en binarios
+    RETURN 
     
 INT_TMR0:
     RESET_TMR0 217		; Reiniciamos TMR0 para 50ms
@@ -95,10 +115,15 @@ main:
     BANKSEL PORTA
 
 LOOP:
-    ;MOVF    PORTA, W		; Valor del PORTA a W
-    MOVF    valor, W		; Movemos W a variable valor
+    MOVF    num, W		; Movemos num_bianrios a W
+    MOVWF   cantidad		; Movemos W a la variable cantidad
+    MOVF    num, W		; Movemos num_bianrios a W
+    MOVF    valor		; Movemos W a la variable valor
     CALL    OBTENER_NIBBLE	; Guardamos nibble alto y bajo de valor
     CALL    SET_DISPLAY		; Guardamos los valores a enviar en PORTA para mostrar valor en hex
+    CALL    CENTENAS
+    CALL    DECENAS
+    CALL    UNIDADES
     GOTO    LOOP
 
 ; ------------subrutinas
@@ -112,29 +137,34 @@ CONFIG_IO:
     BSF	    TRISB, 0		; PORTB0 como entrada
     BSF	    TRISB, 1		; PORTB1 como entrada
     CLRF    TRISA		; PORTA como salida
+    CLRF    TRISC		; PORTC como salida
     BCF	    TRISD, 0		; RD0 como salida / display nibble alto
     BCF	    TRISD, 1		; RD1 como salida / display nibble bajo
+    BCF	    TRISD, 3		; RD3 como salida
+    BCF	    TRISD, 4		; RD4 como salida
+    BCF	    TRISD, 5		; RD5 como salida
 
     BANKSEL OPTION_REG
-    BCF	    OPTION_REG, 7
+    BCF	    OPTION_REG, 7	; PORTB Pull-up habilitado
 
     BANKSEL WPUB
-    BSF	    WPUB, 0
-    BSF	    WPUB, 1
+    BSF	    WPUB, 0		; PORTB0 habilitado como Pull-up
+    BSF	    WPUB, 1		; PORTB1 habilitado como Pull-up
 
     BANKSEL PORTA
-    CLRF    PORTA
+    CLRF    PORTA		; Limpieza de puertos
     CLRF    PORTB
     CLRF    PORTD
-    CLRF    banderas
+    CLRF    PORTC
+    CLRF    banderas		; Limpieza de banderas
     RETURN
 
 CONFIG_RELOJ:
-    BANKSEL OSCCON	;cambiamos a banco 1
-    BSF OSCCON, 0	; scs -> 1, usamos reloj interno
+    BANKSEL OSCCON		;cambiamos a banco 1
+    BSF OSCCON, 0		; scs -> 1, usamos reloj interno
     BSF OSCCON, 6
     BSF OSCCON, 5
-    BCF OSCCON, 4	; IRCF<2:0> -> 110 4MHz
+    BCF OSCCON, 4		; IRCF<2:0> -> 110 4MHz
     RETURN
     
 CONFIG_TMR0:
@@ -149,21 +179,21 @@ CONFIG_TMR0:
 
 CONFIG_INT:
     BANKSEL INTCON
-    BSF GIE		; Habilitamos interrupciones
-    BSF RBIE		; Habilitamos interrupcion RBIE
-    BSF	T0IE		; Habilitamos interrupcion TMR0
-    BCF	T0IF		; Limpiamos bandera de int. de TMR0
-    BCF RBIF		; Limpia bandera RBIF
+    BSF GIE			; Habilitamos interrupciones
+    BSF RBIE			; Habilitamos interrupcion RBIE
+    BSF	T0IE			; Habilitamos interrupcion TMR0
+    BCF	T0IF			; Limpiamos bandera de int. de TMR0
+    BCF RBIF			; Limpia bandera RBIF
     RETURN
 
 CONFIG_IOCB:
     BANKSEL TRISA
-    BSF	    IOCB, 0	; Interrupción habilitada en PORTB0
-    BSF	    IOCB, 1	; Interrupción habilitada en PORTB1
+    BSF	    IOCB, 0		; Interrupción habilitada en PORTB0
+    BSF	    IOCB, 1		; Interrupción habilitada en PORTB1
 
     BANKSEL PORTB
-    MOVF    PORTB, W	; Al leer, deja de hacer mismatch
-    BCF	    RBIF	; Limpiamos bandera de interrupción
+    MOVF    PORTB, W	        ; Al leer, deja de hacer mismatch
+    BCF	    RBIF		; Limpiamos bandera de interrupción
     RETURN
     
 OBTENER_NIBBLE:			; Obtenemos nibble bajo
@@ -185,28 +215,107 @@ SET_DISPLAY:
     MOVF    nibbles+1, W	; Movemos nibble alto a W
     CALL    TABLA_7SEG		; Buscamos valor a cargar en PORTA
     MOVWF   display+1		; Guardamos en display+1
+    
+    MOVF    UNITS, W		; 
+    CALL    TABLA_7SEG		; Buscamos valor a cargar en PORTC
+    MOVWF   decenas		; Guardamos en decenas
+    
+    MOVF    TENS, W		;
+    CALL    TABLA_7SEG		; Buscamos valor a cargar en PORTC
+    MOVWF   centenas		; Guardamos en centenas
+    
+    MOVF    HUNDRS, W		;
+    CALL    TABLA_7SEG		; Buscamos valor a cargar en PORTC
+    MOVWF   unidades		; Guardamos en unidades
     RETURN
     
 MOSTRAR_VALOR:
     BCF	    PORTD, 0		; Apagamos display de nibble alto
-    BCF	    PORTD, 1		; Apagamos display de nibble bajo
+    BCF	    PORTD, 1		; Apagamos display de nibble bajo   
+    BCF	    PORTD, 3		; Apagamos display 
+    BCF	    PORTD, 4		; Apagamos display 
+    BCF	    PORTD, 5		; Apagamos display
+    
     BTFSC   banderas, 0		; Verificamos bandera
-    GOTO    DISPLAY_1		
+    GOTO    DISPLAY_0	
+    BTFSC   banderas, 1		; Verificamos bandera
+    GOTO    DISPLAY_1
+    BTFSC   banderas, 3		; Verificamos bandera
+    GOTO    DISPLAY_2
+    BTFSC   banderas, 4		; Verificamos bandera
+    GOTO    DISPLAY_3
+    BTFSC   banderas, 5		; Verificamos bandera
+    GOTO    DISPLAY_4
     
     DISPLAY_0:			
 	MOVF    display, W	; Movemos display a W
 	MOVWF   PORTA		; Movemos Valor de tabla a PORTA
 	BSF	PORTD, 1	; Encendemos display de nibble bajo
-	BSF	banderas, 0	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+	BCF	banderas, 0	
+	BSF	banderas, 1	
     RETURN
 
     DISPLAY_1:
 	MOVF    display+1, W	; Movemos display+1 a W
 	MOVWF   PORTA		; Movemos Valor de tabla a PORTA
 	BSF	PORTD, 0	; Encendemos display de nibble alto
-	BCF	banderas, 0	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+	BCF	banderas, 1	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+	BSF	banderas, 3	
+    RETURN
+    
+    DISPLAY_2:			
+	MOVF    decenas, W	; Movemos display a W
+	MOVWF   PORTC		; Movemos Valor de tabla a PORTC
+	BSF	PORTD, 5	; Encendemos display 
+	BCF	banderas, 3	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+	BSF	banderas, 4	
     RETURN
 
+    DISPLAY_3:
+	MOVF    centenas, W	; Movemos display+1 a W
+	MOVWF   PORTC		; Movemos Valor de tabla a PORTC
+	BSF	PORTD, 4	; Encendemos display 
+	BCF	banderas, 4	; Cambiamos bandera para cambiar el otro display en la siguiente interrupción
+	BSF	banderas, 5	
+    RETURN
+    
+    DISPLAY_4:
+	MOVF    unidades, W	; Movemos display+4 a W
+	MOVWF   PORTC		; Movemos Valor de tabla a PORTC
+	BSF	PORTD, 3	; Encendemos display 
+	CLRF	banderas
+    RETURN
+    
+CENTENAS:
+    CLRF    HUNDRS		; Limpiamos registro
+    MOVLW   100
+    SUBWF   cantidad, F		
+    BTFSS   STATUS, 0		; Skip if carry
+    GOTO    $+3
+    INCF    HUNDRS		; Incrementamos contador de centenas
+    GOTO    $-5
+    RETURN
+
+DECENAS:
+    MOVLW   100		
+    ADDWF   cantidad		; Sumar 100 al contador en decimales
+    CLRF    TENS		; Limpiamos registro
+    MOVLW   10
+    SUBWF   cantidad, F
+    BTFSS   STATUS, 0		; Skip if carry
+    GOTO    $+3
+    INCF    TENS		; Incrementamos contador de decenas
+    GOTO    $-5
+    RETURN
+
+UNIDADES:
+    MOVLW   10
+    ADDWF   cantidad		; Sumar 10 al contador en decimales
+    CLRF    UNITS		; Limpiamos registro
+    MOVF    cantidad, W
+    MOVWF   UNITS		; Guardar valor en registro
+    RETURN
+    
     
 ORG 200h
 TABLA_7SEG:
@@ -230,7 +339,5 @@ TABLA_7SEG:
     RETLW   01011110B	;d
     RETLW   01111001B	;E
     RETLW   01110001B	;F
-    
+       
 END
-
-
